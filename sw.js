@@ -1,0 +1,57 @@
+// Stock Scanner Pro — Service Worker
+// Bump this on every deploy so old clients pick up the new app shell instead
+// of being stuck on a stale cached index.html.
+const CACHE_NAME = 'scanner-pro-shell-v1';
+
+const APP_SHELL = [
+  './',
+  './index.html',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
+  './icon-512-maskable.png'
+];
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(APP_SHELL))
+      .then(() => self.skipWaiting())
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((names) =>
+      Promise.all(names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n)))
+    ).then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+
+  // CRITICAL: never intercept/cache cross-origin requests. This app's whole
+  // purpose is live financial data (Finnhub/Twelve Data/FMP/Polygon/Alpha
+  // Vantage/Yahoo/Stooq/Tiingo/EODHD/Alpaca/Intrinio/Wikipedia/iShares/
+  // GitHub, plus whatever CORS proxy is in front of some of them). Caching
+  // any of that would silently serve stale prices/fundamentals. Let the
+  // browser handle those requests completely normally.
+  if (url.origin !== self.location.origin) return;
+
+  // Same-origin: cache-first for the app shell, falling back to network,
+  // so the app still opens (though obviously can't fetch live data) offline.
+  event.respondWith(
+    caches.match(event.request).then((cached) => {
+      if (cached) return cached;
+      return fetch(event.request).then((res) => {
+        // Only cache successful, basic (same-origin) responses.
+        if (res && res.status === 200 && res.type === 'basic') {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        }
+        return res;
+      }).catch(() => cached); // if offline and not cached, this will just fail naturally
+    })
+  );
+});
